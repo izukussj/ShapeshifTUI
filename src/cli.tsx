@@ -17,11 +17,15 @@ function exitAltScreen() {
   process.stdout.write('\x1b[?1049l');
 }
 
+type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+const SANDBOX_MODES: SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
+
 interface CliArgs {
   url: string;
   urlProvided: boolean;
   cwd: string | null;
   serve: boolean;
+  sandbox: SandboxMode | null;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -29,6 +33,13 @@ function parseArgs(argv: string[]): CliArgs {
   let urlProvided = false;
   let cwd: string | null = null;
   let serve = true;
+  let sandbox: SandboxMode | null = null;
+  const setSandbox = (mode: SandboxMode, flag: string) => {
+    if (sandbox && sandbox !== mode) {
+      throw new Error(`Conflicting sandbox flags: already set to "${sandbox}", got ${flag} (${mode})`);
+    }
+    sandbox = mode;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--cwd') {
@@ -37,18 +48,38 @@ function parseArgs(argv: string[]): CliArgs {
       cwd = path.resolve(next);
     } else if (a === '--no-serve') {
       serve = false;
+    } else if (a === '--write' || a === '--writable') {
+      // Shorthand for --sandbox workspace-write: codex may edit files in cwd.
+      setSandbox('workspace-write', a);
+    } else if (a === '--sandbox') {
+      const next = argv[++i];
+      if (!next) throw new Error(`--sandbox requires one of: ${SANDBOX_MODES.join(', ')}`);
+      if (!SANDBOX_MODES.includes(next as SandboxMode)) {
+        throw new Error(`--sandbox: unknown mode "${next}" — expected one of: ${SANDBOX_MODES.join(', ')}`);
+      }
+      setSandbox(next as SandboxMode, '--sandbox');
     } else if (a === '--help' || a === '-h') {
-      console.log('Usage: shapeshiftui [ws-url] [--cwd <path>] [--no-serve]');
+      console.log('Usage: shapeshiftui [ws-url] [options]');
       console.log('');
       console.log('Launches the TUI. If no URL is given, spawns the Codex bridge on :8080.');
-      console.log('Pass --no-serve to skip the spawn when an external bridge is already running.');
+      console.log('');
+      console.log('Options:');
+      console.log('  --cwd <path>           run codex with a different working directory');
+      console.log('  --write                allow codex to edit files in the workspace');
+      console.log('                         (shorthand for --sandbox workspace-write)');
+      console.log('  --sandbox <mode>       set codex sandbox mode explicitly:');
+      console.log('                           read-only             default; no writes (safest)');
+      console.log('                           workspace-write       edits within --cwd only');
+      console.log('                           danger-full-access    no sandboxing (use with care)');
+      console.log('  --no-serve             skip spawning a bridge (use when one is already running)');
+      console.log('  -h, --help             show this help and exit');
       process.exit(0);
     } else if (a && !a.startsWith('--')) {
       url = a;
       urlProvided = true;
     }
   }
-  return { url, urlProvided, cwd, serve };
+  return { url, urlProvided, cwd, serve, sandbox };
 }
 
 function probePort(host: string, port: number, timeoutMs = 250): Promise<boolean> {
@@ -92,7 +123,7 @@ function pickBackend(): Backend | null {
   return null;
 }
 
-async function spawnBridge(url: string): Promise<ChildProcess> {
+async function spawnBridge(url: string, sandbox: SandboxMode | null): Promise<ChildProcess> {
   const u = new URL(url);
   const port = Number(u.port) || 8080;
   const host = u.hostname || 'localhost';
@@ -112,7 +143,8 @@ async function spawnBridge(url: string): Promise<ChildProcess> {
   }
 
   const bridgePath = fileURLToPath(new URL(`../server/${backend.script}`, import.meta.url));
-  process.stderr.write(`starting ${backend.label} bridge on ws://${host}:${port}…\n`);
+  const sandboxNote = sandbox ? ` [sandbox: ${sandbox}]` : '';
+  process.stderr.write(`starting ${backend.label} bridge on ws://${host}:${port}${sandboxNote}…\n`);
 
   const child = spawn(process.execPath, [bridgePath], {
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -120,6 +152,8 @@ async function spawnBridge(url: string): Promise<ChildProcess> {
       ...process.env,
       CODEX_BRIDGE_PORT: String(port),
       PORT: String(port),
+      // Flag wins over inherited env so `--write` survives a stale shell.
+      ...(sandbox ? { CODEX_SANDBOX: sandbox } : {}),
     },
   });
 
@@ -138,12 +172,19 @@ async function spawnBridge(url: string): Promise<ChildProcess> {
 }
 
 async function main() {
-  const { url, urlProvided, cwd, serve } = parseArgs(process.argv.slice(2));
+  const { url, urlProvided, cwd, serve, sandbox } = parseArgs(process.argv.slice(2));
+
+  if (sandbox && urlProvided) {
+    process.stderr.write(
+      `note: --sandbox/--write only applies when spawning a bridge. ` +
+      `Connecting to an existing bridge at ${url} — its sandbox is whatever that process was started with.\n`,
+    );
+  }
 
   let bridgeChild: ChildProcess | null = null;
   if (serve && !urlProvided) {
     try {
-      const child = await spawnBridge(url);
+      const child = await spawnBridge(url, sandbox);
       bridgeChild = child ?? null;
     } catch (err) {
       console.error(`\n${(err as Error).message}\n`);

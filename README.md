@@ -46,6 +46,18 @@ First run detects `codex` on `PATH` and auto-spawns `server/codex-bridge.js` on 
 
 Then type something like `make a counter` or `show me my processes` and watch it render.
 
+### Sandbox tiers
+
+Codex runs in `read-only` mode by default — it can run commands but can't write files. Opt into more:
+
+```bash
+shapeshiftui --write                       # edits inside --cwd (workspace-write)
+shapeshiftui --sandbox danger-full-access  # no sandboxing (use sparingly)
+shapeshiftui --sandbox read-only           # explicit, matches default
+```
+
+`--write` is shorthand for `--sandbox workspace-write`. The flag only applies when ShapeshifTUI spawns the bridge itself — when connecting to an external bridge, that bridge's `CODEX_SANDBOX` at startup wins.
+
 ## Scripts
 
 | Command | What it does |
