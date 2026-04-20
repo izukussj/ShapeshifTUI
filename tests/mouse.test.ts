@@ -23,6 +23,15 @@ describe('parseMouseChunk', () => {
     expect(drag.events).toEqual([{ button: 0, x: 9, y: 4, type: 'motion' }]);
   });
 
+  it('parses wheel packets separately from button presses', () => {
+    const { events, cleaned } = parseMouseChunk('\x1b[<64;10;5M\x1b[<65;10;5M');
+    expect(events).toEqual([
+      { button: 0, x: 9, y: 4, type: 'wheel', direction: 'up' },
+      { button: 1, x: 9, y: 4, type: 'wheel', direction: 'down' },
+    ]);
+    expect(cleaned).toBe('');
+  });
+
   it('extracts multiple events from one chunk and strips mouse bytes', () => {
     const input = 'a\x1b[<0;1;1Mb\x1b[<0;2;2mc';
     const { events, cleaned } = parseMouseChunk(input);

@@ -6,7 +6,8 @@ export interface MouseEvent {
   x: number;
   y: number;
   button: number;
-  type: 'press' | 'release' | 'motion';
+  type: 'press' | 'release' | 'motion' | 'wheel';
+  direction?: 'up' | 'down' | 'left' | 'right';
 }
 
 const MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
@@ -24,11 +25,24 @@ export function parseMouseChunk(str: string): { events: MouseEvent[]; cleaned: s
   let match: RegExpExecArray | null;
   while ((match = MOUSE_RE.exec(str)) !== null) {
     const rawBtn = parseInt(match[1]!, 10);
+    const button = rawBtn & 3;
+    const isWheel = (rawBtn & 64) !== 0;
     const isMotion = (rawBtn & 32) !== 0;
+    const x = parseInt(match[2]!, 10) - 1;
+    const y = parseInt(match[3]!, 10) - 1;
+    if (isWheel) {
+      const direction =
+        button === 0 ? 'up' :
+        button === 1 ? 'down' :
+        button === 2 ? 'left' :
+        'right';
+      events.push({ button, x, y, type: 'wheel', direction });
+      continue;
+    }
     events.push({
-      button: rawBtn & 3,
-      x: parseInt(match[2]!, 10) - 1,
-      y: parseInt(match[3]!, 10) - 1,
+      button,
+      x,
+      y,
       type: isMotion ? 'motion' : match[4] === 'M' ? 'press' : 'release',
     });
   }

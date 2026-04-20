@@ -166,7 +166,8 @@ Props the component receives:
 | `Ctrl+E` | Focus runtime pane |
 | `Tab` | From chat → jump into runtime. Inside runtime, Tab cycles focus through buttons, inputs, and other focusable widgets. Use `Ctrl+A` to return to chat. |
 | `Enter` / `Space` | Activate focused button |
-| `PgUp` / `PgDn` | Scroll chat history |
+| `PgUp` / `PgDn` | Scroll active pane |
+| Mouse wheel | Scroll pane under cursor |
 | `/` | Open slash-command menu (in chat) — `↑`/`↓` to browse, `Tab`/`Enter` to accept |
 | `Esc` | Cancel the in-flight turn or close an open dialog |
 | `Ctrl+K` | Toggle the keyboard cheatsheet |

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, type MutableRefObject } from 'react';
+import React, { useEffect, useMemo, useState, type MutableRefObject } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import type { ChatMessage } from './types.js';
@@ -31,6 +31,7 @@ interface ChatProps {
   onSend: (content: string) => void;
   focused: boolean;
   scrollOffset: number;
+  onScrollOffsetChange: (offset: number) => void;
   width: number | string;
   // Rows allocated to the chat pane by the flex parent (terminal height minus
   // app chrome). Used to slice messages so the chat never overflows its box —
@@ -41,7 +42,18 @@ interface ChatProps {
   captureTabRef: MutableRefObject<boolean>;
 }
 
-export function Chat({ messages, onSend, focused, scrollOffset, width, availableRows, captureTabRef }: ChatProps): React.ReactElement {
+const PREFIX_WIDTH = 7;
+
+export function Chat({
+  messages,
+  onSend,
+  focused,
+  scrollOffset,
+  onScrollOffsetChange,
+  width,
+  availableRows,
+  captureTabRef,
+}: ChatProps): React.ReactElement {
   const [draft, setDraft] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -113,14 +125,28 @@ export function Chat({ messages, onSend, focused, scrollOffset, width, available
 
   // Reserve border (2) + padding (2) + input (1); add lines for scrollback hint
   // and suggestion rows so the message window shrinks rather than overflows.
-  const suggestionLines = suggestions.length > 0 ? suggestions.length + 2 : 0;
-  const reserved = 5 + (scrollOffset > 0 ? 1 : 0) + suggestionLines;
-  const maxVisible = Math.max(1, availableRows - reserved);
-  const end = Math.max(0, messages.length - scrollOffset);
-  const start = Math.max(0, end - maxVisible);
-  const visible = messages.slice(start, end);
+  const frameRows = Math.max(5, availableRows);
+  const wantsScrollHint = scrollOffset > 0;
+  const maxSuggestionLines = Math.max(0, frameRows - 6 - (wantsScrollHint ? 1 : 0));
+  const suggestionLines = suggestions.length > 0
+    ? Math.min(suggestions.length + 2, maxSuggestionLines)
+    : 0;
+  const reserved = 5 + (wantsScrollHint ? 1 : 0) + suggestionLines;
+  const messageRows = Math.max(1, frameRows - reserved);
+  const numericWidth = typeof width === 'number' ? width : 80;
+  const bodyWidth = Math.max(8, numericWidth - 4 - PREFIX_WIDTH);
+  const rows = useMemo(() => buildChatRows(messages, bodyWidth), [messages, bodyWidth]);
+  const maxScrollOffset = Math.max(0, rows.length - messageRows);
+  const clampedScrollOffset = Math.min(scrollOffset, maxScrollOffset);
+  const end = Math.max(0, rows.length - clampedScrollOffset);
+  const start = Math.max(0, end - messageRows);
+  const visible = rows.slice(start, end);
   const olderHidden = start;
-  const newerHidden = messages.length - end;
+  const newerHidden = rows.length - end;
+
+  useEffect(() => {
+    if (scrollOffset !== clampedScrollOffset) onScrollOffsetChange(clampedScrollOffset);
+  }, [clampedScrollOffset, onScrollOffsetChange, scrollOffset]);
 
   return (
     <Box
@@ -129,33 +155,34 @@ export function Chat({ messages, onSend, focused, scrollOffset, width, available
       padding={1}
       flexDirection="column"
       width={width}
+      height={frameRows}
       flexGrow={1}
+      flexShrink={0}
+      overflowY="hidden"
     >
-      {scrollOffset > 0 ? (
+      {clampedScrollOffset > 0 ? (
         <Box>
           <Text color="yellow" dimColor>
-            ── scrolled: {olderHidden} above · {newerHidden} below · PageDn to resume ──
+            ── scrolled: {olderHidden} rows above · {newerHidden} rows below · PageDn/wheel down to resume ──
           </Text>
         </Box>
       ) : null}
-      <Box flexDirection="column" flexGrow={1}>
-        {visible.length === 0 ? (
+      <Box height={messageRows} overflowY="hidden" flexDirection="column" flexShrink={0}>
+        {messages.length === 0 ? (
           <EmptyChat />
         ) : (
-          visible.map((m, i) => {
-            const prev = i > 0 ? visible[i - 1] : null;
-            const topGap = !!prev && prev.sender !== m.sender;
-            return <ChatLine key={m.id} message={m} topGap={topGap} />;
-          })
+          visible.map((row) => <ChatRow key={row.key} row={row} />)
         )}
       </Box>
-      {suggestions.length > 0 ? (
-        <SuggestionPanel
-          suggestions={suggestions}
-          selectedIndex={selectedIndex}
-        />
+      {suggestions.length > 0 && suggestionLines > 0 ? (
+        <Box height={suggestionLines} overflowY="hidden" flexDirection="column" flexShrink={0}>
+          <SuggestionPanel
+            suggestions={suggestions}
+            selectedIndex={selectedIndex}
+          />
+        </Box>
       ) : null}
-      <Box>
+      <Box height={1} overflowY="hidden" flexShrink={0}>
         <Text color={focused ? 'cyan' : 'gray'} bold={focused}>{'❯ '}</Text>
         <TextInput
           value={draft}
@@ -233,6 +260,17 @@ interface ChatLineStyle {
   bold: boolean;
 }
 
+type ChatRowModel =
+  | { kind: 'gap'; key: string }
+  | {
+      kind: 'message';
+      key: string;
+      text: string;
+      first: boolean;
+      bodyDim: boolean;
+      style: ChatLineStyle;
+    };
+
 // (sender, severity) → bullet + label + color. Bullet is the visual anchor
 // (scanning a long chat reads as colored dots), label is secondary context.
 function styleFor(message: ChatMessage): ChatLineStyle {
@@ -243,17 +281,72 @@ function styleFor(message: ChatMessage): ChatLineStyle {
   return { bullet: '○', label: 'sys', color: 'yellow', bold: false };
 }
 
-function ChatLine({ message, topGap }: { message: ChatMessage; topGap: boolean }): React.ReactElement {
-  const { bullet, label, color, bold } = styleFor(message);
+function buildChatRows(messages: ChatMessage[], bodyWidth: number): ChatRowModel[] {
+  const rows: ChatRowModel[] = [];
+  messages.forEach((message, index) => {
+    const prev = index > 0 ? messages[index - 1] : null;
+    if (prev && prev.sender !== message.sender) {
+      rows.push({ kind: 'gap', key: `gap-${message.id}` });
+    }
+    const style = styleFor(message);
+    const content = visibleMessageContent(message);
+    const bodyDim = !content;
+    const body = content || '(layout)';
+    const lines = wrapPlainText(body, bodyWidth);
+    lines.forEach((line, lineIndex) => {
+      rows.push({
+        kind: 'message',
+        key: `${message.id}:${lineIndex}`,
+        text: line,
+        first: lineIndex === 0,
+        bodyDim,
+        style,
+      });
+    });
+  });
+  return rows;
+}
+
+function visibleMessageContent(message: ChatMessage): string {
   // Strip shapeshiftui code blocks from rendered chat — they're noise once mounted.
-  const content = message.content.replace(/```shapeshiftui\s*\n[\s\S]*?```/g, '').trim();
-  const body = content || '(layout)';
-  const bodyDim = !content;
+  return message.content.replace(/```shapeshiftui\s*\n[\s\S]*?```/g, '').trim();
+}
+
+function wrapPlainText(text: string, width: number): string[] {
+  const safeWidth = Math.max(1, width);
+  const rows: string[] = [];
+  for (const rawLine of text.replace(/\r/g, '').split('\n')) {
+    let line = rawLine;
+    if (line.length === 0) {
+      rows.push('');
+      continue;
+    }
+    while (line.length > safeWidth) {
+      const slice = line.slice(0, safeWidth);
+      const breakAt = slice.lastIndexOf(' ');
+      const cut = breakAt >= Math.floor(safeWidth * 0.45) ? breakAt : safeWidth;
+      rows.push(line.slice(0, cut).trimEnd());
+      line = line.slice(cut).trimStart();
+    }
+    rows.push(line);
+  }
+  return rows.length > 0 ? rows : [''];
+}
+
+function ChatRow({ row }: { row: ChatRowModel }): React.ReactElement {
+  if (row.kind === 'gap') return <Box height={1} />;
+  const { bullet, label, color, bold } = row.style;
   return (
-    <Box marginTop={topGap ? 1 : 0}>
-      <Text color={color} bold={bold}>{bullet} </Text>
-      <Text color={color} dimColor={!bold}>{label} </Text>
-      <Text dimColor={bodyDim}>{body}</Text>
+    <Box height={1} overflowY="hidden">
+      <Box width={PREFIX_WIDTH}>
+        {row.first ? (
+          <>
+            <Text color={color} bold={bold}>{bullet} </Text>
+            <Text color={color} dimColor={!bold}>{label}</Text>
+          </>
+        ) : null}
+      </Box>
+      <Text dimColor={row.bodyDim} wrap="truncate-end">{row.text}</Text>
     </Box>
   );
 }

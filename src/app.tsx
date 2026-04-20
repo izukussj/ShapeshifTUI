@@ -34,6 +34,9 @@ export function App({ client }: AppProps): React.ReactElement {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   // scrollOffset = how many newest messages to hide. 0 means pinned to latest.
   const [scrollOffset, setScrollOffset] = useState(0);
+  // Vertical offset into the runtime pane. 0 means the generated layout starts
+  // at the top of its viewport.
+  const [runtimeScrollOffset, setRuntimeScrollOffset] = useState(0);
   // Derived from AppError codes from the network layer. Drives the StatusLine
   // dot for conditions that persist longer than a single chat entry.
   const [connectionState, setConnectionState] = useState<ConnectionState>('connected');
@@ -61,6 +64,14 @@ export function App({ client }: AppProps): React.ReactElement {
     [client],
   );
 
+  const scrollChat = useCallback((delta: number) => {
+    setScrollOffset((offset) => Math.max(0, offset + delta));
+  }, []);
+
+  const scrollRuntime = useCallback((delta: number) => {
+    setRuntimeScrollOffset((offset) => Math.max(0, offset + delta));
+  }, []);
+
   useInput((_input, key) => {
     if (key.ctrl && _input === 'c') exit();
     if (key.ctrl && _input === 'a') setActivePane('chat');
@@ -85,6 +96,18 @@ export function App({ client }: AppProps): React.ReactElement {
       return;
     }
 
+    // Scroll whichever pane owns focus. Chat's offset is "newest messages
+    // hidden" (PgUp increases it); runtime's offset is "lines from top"
+    // (PgDn increases it).
+    if (!pending && !helpOpen && (key.pageUp || key.pageDown)) {
+      if (activePane === 'chat') {
+        scrollChat(key.pageUp ? 3 : -3);
+      } else {
+        scrollRuntime(key.pageUp ? -3 : 3);
+      }
+      return;
+    }
+
     // Tab from chat → hop into runtime. Once inside runtime, Tab is NOT
     // intercepted here — Ink's default focus manager cycles through the
     // sandboxed useFocus hooks. Ctrl+A returns to chat. Yields to chat's
@@ -93,23 +116,31 @@ export function App({ client }: AppProps): React.ReactElement {
       setActivePane('runtime');
       return;
     }
-
-    // Chat scrollback. Only when chat is active and no approval is pending.
-    if (activePane === 'chat' && !pending) {
-      if (key.pageUp) setScrollOffset((o) => Math.min(Math.max(0, messages.length - 1), o + 3));
-      else if (key.pageDown) setScrollOffset((o) => Math.max(0, o - 3));
-    }
   });
 
   useEffect(() => {
     return onMouse((e) => {
+      const narrowMode = stdout.columns < 80;
+      const chatW = narrowMode ? stdout.columns : Math.min(60, Math.floor(stdout.columns * 0.4));
+      const overPane: Pane = narrowMode ? activePane : e.x < chatW ? 'chat' : 'runtime';
+
+      if (e.type === 'wheel') {
+        if (helpOpen || approvals.length > 0) return;
+        if (e.direction !== 'up' && e.direction !== 'down') return;
+        if (overPane === 'chat') {
+          scrollChat(e.direction === 'up' ? 3 : -3);
+        } else {
+          scrollRuntime(e.direction === 'up' ? -3 : 3);
+        }
+        return;
+      }
+
       if (e.type !== 'press') return;
       // In narrow/stacked mode only one pane is visible; clicks don't move focus.
-      if (stdout.columns < 80) return;
-      const chatWidth = Math.min(60, Math.floor(stdout.columns * 0.4));
-      setActivePane(e.x < chatWidth ? 'chat' : 'runtime');
+      if (narrowMode) return;
+      setActivePane(overPane);
     });
-  }, [stdout.columns]);
+  }, [activePane, approvals.length, helpOpen, scrollChat, scrollRuntime, stdout.columns]);
 
   useEffect(() => {
     const out = process.stdout;
@@ -155,6 +186,7 @@ export function App({ client }: AppProps): React.ReactElement {
         const code = extractCodeBlock(msg.message.content);
         if (code) {
           setSource(code);
+          setRuntimeScrollOffset(0);
           retryCount.current = 0;
         }
         // Any inbound message proves the socket is alive — clear a transient
@@ -184,6 +216,7 @@ export function App({ client }: AppProps): React.ReactElement {
           if (block) { code = block; break; }
         }
         setSource(code);
+        setRuntimeScrollOffset(0);
       } else if (msg.type === 'approval_request') {
         setApprovals((prev) => [...prev, msg.request]);
       } else if (msg.type === 'mcp_list_result') {
@@ -231,6 +264,7 @@ export function App({ client }: AppProps): React.ReactElement {
   const openMcp = useCallback((mode: McpPanelMode, name?: string) => {
     setAdminView({ mode, name });
     setActivePane('runtime');
+    setRuntimeScrollOffset(0);
     setMcpLastOp(null);
     if (mode === 'list') {
       setMcpLoading(true);
@@ -286,6 +320,7 @@ export function App({ client }: AppProps): React.ReactElement {
         if (cmd === '/plugin' || cmd === '/plugins') {
           setAdminView({ mode: 'plugin' });
           setActivePane('runtime');
+          setRuntimeScrollOffset(0);
           return pushSystem('opened plugin setup guide');
         }
         if (cmd === '/help') {
@@ -338,6 +373,7 @@ export function App({ client }: AppProps): React.ReactElement {
 
   const closeAdminView = useCallback(() => {
     setAdminView(null);
+    setRuntimeScrollOffset(0);
   }, []);
 
   const recordEvent = useCallback((eventType: string, data: unknown) => {
@@ -398,6 +434,7 @@ export function App({ client }: AppProps): React.ReactElement {
               onSend={onSend}
               focused={activePane === 'chat' && !pendingApproval}
               scrollOffset={scrollOffset}
+              onScrollOffsetChange={setScrollOffset}
               width={chatWidth}
               availableRows={availableRows}
               captureTabRef={chatCapturesTab}
@@ -433,6 +470,8 @@ export function App({ client }: AppProps): React.ReactElement {
                   submitEvent={submitEvent}
                   context={context}
                   focused={activePane === 'runtime' && !pendingApproval}
+                  scrollOffset={runtimeScrollOffset}
+                  availableRows={availableRows}
                   onCompileError={onCompileError}
                 />
               )}
@@ -457,8 +496,8 @@ export function App({ client }: AppProps): React.ReactElement {
             : helpOpen
               ? 'Esc: close help  ·  Ctrl+K: toggle'
               : status
-                ? `Esc: cancel turn  ·  Ctrl+K: help  ·  mouse ${mouseOn ? 'on' : 'off'}  ·  Ctrl+C: quit`
-                : `Ctrl+A/E: panes  ·  Ctrl+K: help  ·  mouse ${mouseOn ? 'on' : 'off'} (Ctrl+P)  ·  Ctrl+C: quit`}
+                ? `Esc: cancel turn  ·  PgUp/PgDn: scroll  ·  mouse ${mouseOn ? 'on' : 'off'}  ·  Ctrl+C: quit`
+                : `Ctrl+A/E: panes  ·  PgUp/PgDn: scroll  ·  mouse ${mouseOn ? 'on' : 'off'} (Ctrl+P)  ·  Ctrl+C: quit`}
         </Text>
       </Box>
     </Box>
@@ -545,7 +584,8 @@ function CheatsheetModal({ mouseOn }: { mouseOn: boolean }): React.ReactElement 
         { keys: 'Ctrl+A', label: 'focus chat' },
         { keys: 'Ctrl+E', label: 'focus component' },
         { keys: 'Tab', label: 'chat → runtime, then cycles focus inside' },
-        { keys: 'PgUp / PgDn', label: 'scroll chat history' },
+        { keys: 'PgUp / PgDn', label: 'scroll active pane' },
+        { keys: 'Wheel', label: 'scroll pane under cursor' },
       ],
     },
     {
