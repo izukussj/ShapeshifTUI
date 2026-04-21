@@ -273,18 +273,22 @@ export function App({ client }: AppProps): React.ReactElement {
     return remove;
   }, [client, pushSystem, reportError]);
 
-  // Called by Runtime when compilation fails — auto-retries with the backend.
+  // Called by Runtime when compile/render fails — auto-retries with the backend.
   const onCompileError = useCallback(
     (err: AppError) => {
       if (retryCount.current >= MAX_RETRIES) return;
       retryCount.current++;
+      const label = err.code === 'render_failed' ? 'Render error' : 'Compile error';
       reportError({
         ...err,
-        message: `Compile error (retry ${retryCount.current}/${MAX_RETRIES}): ${err.message}`,
+        message: `${label} (retry ${retryCount.current}/${MAX_RETRIES}): ${err.message}`,
       });
+      const inkHint = err.code === 'render_failed'
+        ? '\nInk tree rule: <Box>, Button, TextInput, Checkbox, Select, Table, and Progress must not be nested inside <Text>. Put layout/widgets in <Box> containers and keep <Text> for inline text only.'
+        : '';
       client.send({
         type: 'chat',
-        content: `Compile error: ${err.message}\nPlease fix the component.`,
+        content: `${label}: ${err.message}${inkHint}\nPlease fix the component.`,
         interactions: [],
       });
     },

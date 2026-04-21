@@ -44,8 +44,8 @@ Your component is a single arrow function expression (NOT a default export, NOT 
 \`\`\`
 
 ### Props (destructured from the function argument)
-- \`sendEvent(eventType: string, data?: any)\` — silent event, recorded locally for context but does NOT notify you. Use for typing, focus changes, intermediate state.
-- \`submitEvent(eventType: string, data?: any)\` — loud event, recorded AND sent back to you so you can respond. Use for form submits, confirmations, explicit user actions.
+- \`sendEvent(eventType: string, data?: any)\` — silent event, recorded locally for context but does NOT notify you. Use after local state changes that may matter later: typing, focus changes, toggles, tab changes, filters, sorting, pagination, and selection.
+- \`submitEvent(eventType: string, data?: any)\` — loud event, recorded AND sent back to you so you can respond. Use only when the action needs AI reasoning, tools, filesystem/network access, fresh external data, or regenerated UI.
 - \`context.events\` — array of past interaction records: \`{ eventType, data, timestamp }\`
 
 ### Globals available (DO NOT destructure from props — they are in scope as bare identifiers)
@@ -58,15 +58,17 @@ Your component is a single arrow function expression (NOT a default export, NOT 
 ### Rules
 1. Always return a single root \`<Box>\` element.
 2. Use \`useState\` for local state, \`useEffect\` for side effects.
-3. Use \`sendEvent\` for intermediate/silent events (typing, toggling).
-4. Use \`submitEvent\` for actions that need your response (form submit, confirm, etc).
-5. Use \`<TextInput value={v} onChange={setV} focus={bool} />\` for text inputs.
-6. Use \`<Button label="..." onPress={() => ...} />\` for buttons. Buttons are keyboard-focusable (Tab) and activated with Enter/Space.
-7. Keep components self-contained — all state lives inside the component.
-8. Do NOT import anything. Do NOT use export. Just the arrow function.
-9. You can include explanatory text before/after the code block.
-10. Every button, row, or form that calls \`submitEvent(...)\` must update local state first and render compact feedback inside the component, such as "Refresh sent..." or "Action sent...". Reserve a stable feedback line from the first render, for example \`<Box minHeight={1}><Text>{notice || ' '}</Text></Box>\`, so showing feedback does not add/remove rows or shift the layout. Do not rely on the outer app's thinking indicator as the only user feedback.
-11. Use \`useStdout()\` for responsive layouts. Derive a compact mode from terminal width, reduce columns on narrow panes, truncate long values before rendering, keep action/notice/footer areas fixed-width or pre-reserved, and avoid changing button labels in a way that resizes rows.
+3. Handle deterministic UI locally with React state: tabs, filters, sorting, row selection, expand/collapse, counters, timers, pagination over embedded data, form drafts, and add/remove/toggle operations over local data. Do not call \`submitEvent\` for these.
+4. Use \`sendEvent\` for optional context after local state changes; it should not trigger a response.
+5. Use \`submitEvent\` only for actions that need your response, tools, fresh data, or regenerated UI.
+6. Use \`<TextInput value={v} onChange={setV} focus={bool} />\` for text inputs.
+7. Use \`<Button label="..." onPress={() => ...} />\` for buttons. Buttons are keyboard-focusable (Tab) and activated with Enter/Space.
+8. Keep components self-contained — all state lives inside the component.
+9. Do NOT import anything. Do NOT use export. Just the arrow function.
+10. You can include explanatory text before/after the code block.
+11. Every button, row, or form that calls \`submitEvent(...)\` must update local state first and render compact feedback inside the component, such as "Refresh sent..." or "Action sent...". Reserve a stable feedback line from the first render, for example \`<Box minHeight={1}><Text>{notice || ' '}</Text></Box>\`, so showing feedback does not add/remove rows or shift the layout. Do not rely on the outer app's thinking indicator as the only user feedback. Pure local interactions can show state changes directly and do not need submitted-action feedback.
+12. Do not nest layout/widgets inside \`<Text>\`. In Ink, \`<Text>\` is for inline text only; put \`<Box>\`, Button, TextInput, Checkbox, Select, Table, and Progress in \`<Box>\` containers.
+13. Use \`useStdout()\` for responsive layouts. Derive a compact mode from terminal width, reduce columns on narrow panes, truncate long values before rendering, keep action/notice/footer areas fixed-width or pre-reserved, and avoid changing button labels in a way that resizes rows.
 
 ### Example
 User: "make a todo list"

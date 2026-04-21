@@ -2,7 +2,7 @@
 
 > Chat-driven terminal UI where the AI ships React/Ink components that run live in a sandbox.
 
-You describe what you want. The AI writes a JSX component. It renders in your terminal. You interact with it. Your actions flow back to the AI. Repeat.
+You describe what you want. The AI writes a JSX component. It renders in your terminal. You interact with it. Pure UI actions run locally; submitted actions flow back to the AI. Repeat.
 
 ```
 ┌─ chat ───────────────┐┌─ runtime ──────────────────────┐
@@ -23,7 +23,7 @@ You describe what you want. The AI writes a JSX component. It renders in your te
 2. The backend (Codex CLI by default, plain OpenAI as a fallback) responds with a JSX component inside a `shapeshiftui` fenced code block.
 3. `src/sandbox.ts` extracts the block, esbuild transpiles it, and it runs in a Node `vm` context with Ink, React, hooks, and custom widgets injected as globals.
 4. The component renders in the right pane.
-5. `submitEvent` fires send events back to the AI (loud). `sendEvent` records them locally and sends them as context with your next message (silent).
+5. Deterministic UI actions stay inside the generated React component. `sendEvent` records silent context for the next real turn. `submitEvent` triggers an immediate AI response only when the action needs tools, fresh data, or regenerated UI.
 
 ## Requirements
 
@@ -158,6 +158,8 @@ Props the component receives:
 - `sendEvent(eventType, data?)` — silent, recorded locally, sent as context next turn
 - `submitEvent(eventType, data?)` — loud, triggers an immediate AI response
 - `context.events` — past interaction records
+
+Generated layouts should handle pure UI interactions locally with React state: tabs, filters, sorting, row selection, expand/collapse, counters, timers, pagination over embedded data, form drafts, and add/remove/toggle operations over component-local data. Use `sendEvent` only when that local state change should become context later. Use `submitEvent` for actions that need Codex/OpenAI, tools, filesystem or network access, external data, or a regenerated view.
 
 ## Keyboard
 

@@ -26,6 +26,11 @@ const EXAMPLE_PROMPTS = [
   'a markdown cheatsheet I can scroll',
 ];
 
+export interface ChatDraftState {
+  draft: string;
+  pastedText: string | null;
+}
+
 interface ChatProps {
   messages: ChatMessage[];
   onSend: (content: string) => void;
@@ -43,6 +48,8 @@ interface ChatProps {
 }
 
 const PREFIX_WIDTH = 7;
+const BRACKETED_PASTE_START = /\x1B\[200~/g;
+const BRACKETED_PASTE_END = /\x1B\[201~/g;
 
 export function Chat({
   messages,
@@ -55,11 +62,12 @@ export function Chat({
   captureTabRef,
 }: ChatProps): React.ReactElement {
   const [draft, setDraft] = useState('');
+  const [pastedText, setPastedText] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   // Slash-command autocomplete. Only active when the draft starts with "/" and
   // the user hasn't typed a space yet — once they're on args, suggestions hide.
-  const slashInput = draft.startsWith('/') && !draft.includes(' ');
+  const slashInput = !pastedText && draft.startsWith('/') && !draft.includes(' ');
   const suggestions = slashInput
     ? COMMANDS.filter((c) => c.name.startsWith(draft))
     : [];
@@ -76,6 +84,17 @@ export function Chat({
   useEffect(() => {
     setSelectedIndex(0);
   }, [draft]);
+
+  // Ask terminals to wrap paste payloads in bracketed-paste markers. Ink still
+  // hands us plain text, but this reduces Enter/newline ambiguity in terminals
+  // that support it and lets our normalizer strip leaked markers safely.
+  useEffect(() => {
+    if (!process.stdout.isTTY) return;
+    process.stdout.write('\x1B[?2004h');
+    return () => {
+      process.stdout.write('\x1B[?2004l');
+    };
+  }, []);
 
   // Tab completes toward the selection. If the draft already matches the full
   // completion, Tab stays put (Enter fires the send).
@@ -97,7 +116,21 @@ export function Chat({
     }
   }, { isActive: focused });
 
+  const updateDraft = (nextValue: string) => {
+    const next = deriveChatDraftState({ draft, pastedText }, nextValue);
+    setDraft(next.draft);
+    setPastedText(next.pastedText);
+  };
+
   const submit = (value: string) => {
+    if (pastedText) {
+      if (!pastedText.trim()) return;
+      onSend(pastedText);
+      setDraft('');
+      setPastedText(null);
+      return;
+    }
+
     // Enter progresses the slash menu: complete if the draft is a prefix, or
     // send if the draft already matches an argless command. Without this,
     // argless commands (/help) loop — Enter would just re-complete
@@ -107,6 +140,7 @@ export function Chat({
       const completed = picked.args ? `${picked.name} ` : picked.name;
       if (draft !== completed) {
         setDraft(completed);
+        setPastedText(null);
         return;
       }
       // Draft already equals the completion. If the command is argless, ship
@@ -114,6 +148,7 @@ export function Chat({
       if (!picked.args) {
         onSend(draft.trim());
         setDraft('');
+        setPastedText(null);
       }
       return;
     }
@@ -121,6 +156,7 @@ export function Chat({
     if (!trimmed) return;
     onSend(trimmed);
     setDraft('');
+    setPastedText(null);
   };
 
   // Reserve border (2) + padding (2) + input (1); add lines for scrollback hint
@@ -185,14 +221,58 @@ export function Chat({
       <Box height={1} overflowY="hidden" flexShrink={0}>
         <Text color={focused ? 'cyan' : 'gray'} bold={focused}>{'❯ '}</Text>
         <TextInput
-          value={draft}
-          onChange={setDraft}
+          value={pastedText ? pastedDraftLabel(pastedText) : draft}
+          onChange={updateDraft}
           onSubmit={submit}
           focus={focused}
         />
       </Box>
     </Box>
   );
+}
+
+export function normalizePastedText(value: string): string {
+  return value
+    .replace(BRACKETED_PASTE_START, '')
+    .replace(BRACKETED_PASTE_END, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+}
+
+export function pastedDraftLabel(value: string): string {
+  const normalized = normalizePastedText(value);
+  const withoutFinalNewline = normalized.endsWith('\n')
+    ? normalized.slice(0, -1)
+    : normalized;
+  const lines = withoutFinalNewline.length === 0
+    ? 0
+    : withoutFinalNewline.split('\n').length;
+  return `Pasted ${lines} lines, ${formatCharCount(normalized.length)}`;
+}
+
+export function deriveChatDraftState(current: ChatDraftState, nextValue: string): ChatDraftState {
+  const normalized = normalizePastedText(nextValue);
+  if (normalized.includes('\n')) {
+    return { draft: '', pastedText: normalized };
+  }
+
+  if (!current.pastedText) {
+    return { draft: normalized, pastedText: null };
+  }
+
+  const label = pastedDraftLabel(current.pastedText);
+  if (nextValue === label) return current;
+  if (!nextValue || label.startsWith(nextValue)) return { draft: '', pastedText: null };
+  if (nextValue.startsWith(label)) {
+    return { draft: nextValue.slice(label.length), pastedText: null };
+  }
+  return { draft: normalized, pastedText: null };
+}
+
+function formatCharCount(count: number): string {
+  if (count < 1000) return `${count} chars`;
+  const value = count / 1000;
+  return `${value.toFixed(value < 10 ? 1 : 0)}k chars`;
 }
 
 function EmptyChat(): React.ReactElement {

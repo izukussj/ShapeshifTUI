@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import * as Ink from 'ink';
 import { Box, Text } from 'ink';
 import TextInput from 'ink-text-input';
@@ -58,6 +58,17 @@ export function Runtime({
     if (!source) return null;
     return compileComponent(source, globals);
   }, [source, globals]);
+
+  const onRenderError = useCallback((error: Error) => {
+    onCompileError({
+      source: 'runtime',
+      code: 'render_failed',
+      severity: 'error',
+      recoverable: true,
+      message: error.message,
+      details: { error: error.message, stack: error.stack },
+    });
+  }, [onCompileError]);
 
   // Auto-retry: notify parent on compile failure with a structured AppError.
   useEffect(() => {
@@ -120,12 +131,45 @@ export function Runtime({
         </Box>
       ) : null}
       <Box height={viewportRows} overflowY="hidden" flexDirection="column">
-        <Ink.Transform transform={(output) => cropOutput(output, scrollOffset, viewportRows)}>
-          <Component key={source} sendEvent={sendEvent} submitEvent={submitEvent} context={context} />
-        </Ink.Transform>
+        <RuntimeErrorBoundary key={source} onError={onRenderError}>
+          <Ink.Transform transform={(output) => cropOutput(output, scrollOffset, viewportRows)}>
+            <Component sendEvent={sendEvent} submitEvent={submitEvent} context={context} />
+          </Ink.Transform>
+        </RuntimeErrorBoundary>
       </Box>
     </Box>
   );
+}
+
+interface RuntimeErrorBoundaryProps {
+  children: React.ReactNode;
+  onError: (error: Error) => void;
+}
+
+interface RuntimeErrorBoundaryState {
+  error: Error | null;
+}
+
+class RuntimeErrorBoundary extends React.Component<RuntimeErrorBoundaryProps, RuntimeErrorBoundaryState> {
+  state: RuntimeErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): RuntimeErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error): void {
+    this.props.onError(error);
+  }
+
+  render(): React.ReactNode {
+    if (!this.state.error) return this.props.children;
+    return (
+      <Box flexDirection="column">
+        <Text color="red" bold>✗ Render error</Text>
+        <Text>{this.state.error.message}</Text>
+      </Box>
+    );
+  }
 }
 
 function cropOutput(output: string, offset: number, rows: number): string {
