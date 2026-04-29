@@ -48,8 +48,8 @@ interface ChatProps {
 }
 
 const PREFIX_WIDTH = 7;
-const BRACKETED_PASTE_START = /\x1B\[200~/g;
-const BRACKETED_PASTE_END = /\x1B\[201~/g;
+const BRACKETED_PASTE_START = /(?:\x1B)?\[200~/g;
+const BRACKETED_PASTE_END = /(?:\x1B)?\[201~/g;
 
 export function Chat({
   messages,
@@ -159,17 +159,21 @@ export function Chat({
     setPastedText(null);
   };
 
-  // Reserve border (2) + padding (2) + input (1); add lines for scrollback hint
-  // and suggestion rows so the message window shrinks rather than overflows.
+  // Reserve border (2) + padding (2) + a wrapping input area; add lines for
+  // scrollback hint and suggestions so messages shrink rather than overflow.
   const frameRows = Math.max(5, availableRows);
   const wantsScrollHint = scrollOffset > 0;
-  const maxSuggestionLines = Math.max(0, frameRows - 6 - (wantsScrollHint ? 1 : 0));
+  const numericWidth = typeof width === 'number' ? width : 80;
+  const innerWidth = Math.max(1, numericWidth - 4);
+  const inputWidth = Math.max(1, innerWidth - 2);
+  const inputValue = pastedText ? pastedDraftLabel(pastedText) : draft;
+  const inputRows = chatInputRows(inputValue, inputWidth, frameRows, focused, wantsScrollHint);
+  const maxSuggestionLines = Math.max(0, frameRows - 5 - inputRows - (wantsScrollHint ? 1 : 0));
   const suggestionLines = suggestions.length > 0
     ? Math.min(suggestions.length + 2, maxSuggestionLines)
     : 0;
-  const reserved = 5 + (wantsScrollHint ? 1 : 0) + suggestionLines;
+  const reserved = 4 + inputRows + (wantsScrollHint ? 1 : 0) + suggestionLines;
   const messageRows = Math.max(1, frameRows - reserved);
-  const numericWidth = typeof width === 'number' ? width : 80;
   const bodyWidth = Math.max(8, numericWidth - 4 - PREFIX_WIDTH);
   const rows = useMemo(() => buildChatRows(messages, bodyWidth), [messages, bodyWidth]);
   const maxScrollOffset = Math.max(0, rows.length - messageRows);
@@ -194,6 +198,7 @@ export function Chat({
       height={frameRows}
       flexGrow={1}
       flexShrink={0}
+      overflowX="hidden"
       overflowY="hidden"
     >
       {clampedScrollOffset > 0 ? (
@@ -218,17 +223,36 @@ export function Chat({
           />
         </Box>
       ) : null}
-      <Box height={1} overflowY="hidden" flexShrink={0}>
-        <Text color={focused ? 'cyan' : 'gray'} bold={focused}>{'❯ '}</Text>
-        <TextInput
-          value={pastedText ? pastedDraftLabel(pastedText) : draft}
-          onChange={updateDraft}
-          onSubmit={submit}
-          focus={focused}
-        />
+      <Box height={inputRows} overflowX="hidden" overflowY="hidden" flexShrink={0}>
+        <Box width={2} flexShrink={0}>
+          <Text color={focused ? 'cyan' : 'gray'} bold={focused}>{'❯ '}</Text>
+        </Box>
+        <Box width={inputWidth} flexDirection="column" overflowX="hidden" overflowY="hidden" flexShrink={0}>
+          <TextInput
+            value={inputValue}
+            onChange={updateDraft}
+            onSubmit={submit}
+            focus={focused}
+          />
+        </Box>
       </Box>
     </Box>
   );
+}
+
+export function chatInputRows(
+  value: string,
+  inputWidth: number,
+  frameRows: number,
+  focused: boolean,
+  hasScrollHint: boolean,
+): number {
+  const safeWidth = Math.max(1, inputWidth);
+  const measured = value.length > 0 ? `${value}${focused ? ' ' : ''}` : ' ';
+  const rows = wrapPlainText(measured, safeWidth).length;
+  // Keep at least one message row visible inside the frame.
+  const maxRows = Math.max(1, frameRows - 5 - (hasScrollHint ? 1 : 0));
+  return Math.max(1, Math.min(rows, maxRows));
 }
 
 export function normalizePastedText(value: string): string {
