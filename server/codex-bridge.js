@@ -141,6 +141,7 @@ const SANDBOX = process.env.CODEX_SANDBOX || 'read-only';
 // Passed to codex as `-m <model>`. Empty → let codex pick its own default.
 const CODEX_MODEL = process.env.CODEX_MODEL || '';
 const MODEL_ARGS = CODEX_MODEL ? ['-m', CODEX_MODEL] : [];
+const MAX_QUEUED_TURNS = 3;
 
 // Loaded once at startup. Prepended on the first turn of sessions whose cwd
 // is not the default (i.e. the client passed --cwd to run codex elsewhere).
@@ -167,6 +168,10 @@ class Session {
     // handleCancel() SIGTERM the process on user request.
     this.currentChild = null;
     this.cancelled = false;
+    // Turns can arrive during the short gap after Codex emits an agent
+    // message and before the child process closes. Queue them so render-repair
+    // prompts and quick user submits are not dropped.
+    this.queuedTurns = [];
     // Pre-spawned `codex exec resume … -` process waiting on stdin. Consumed
     // at the start of the next turn to skip the 500ms–1s cold-spawn cost.
     // Null until we have a threadId and a completed turn behind us.
@@ -235,6 +240,7 @@ class Session {
     this.cwd = resolved;
     if (changed) {
       this.pendingForkContext = null;
+      this.clearQueuedTurns('cwd_changed');
       this.killHotSpare();
     }
     this.log({ type: 'init', cwd: resolved });
@@ -271,6 +277,40 @@ class Session {
   sendStatus(text) {
     this.ws.send(JSON.stringify({ type: 'status', text }));
     this.log({ type: 'status', text });
+  }
+
+  queueTurn(prompt) {
+    this.queuedTurns.push({ prompt, queuedAt: Date.now() });
+    if (this.queuedTurns.length > MAX_QUEUED_TURNS) {
+      const dropped = this.queuedTurns.shift();
+      this.log({
+        type: 'turn-queue-dropped',
+        count: this.queuedTurns.length,
+        promptPreview: dropped?.prompt.slice(0, 200) ?? '',
+      });
+    }
+    this.sendStatus(`queued next turn (${this.queuedTurns.length})`);
+    this.log({ type: 'turn-queued', count: this.queuedTurns.length, promptPreview: prompt.slice(0, 200) });
+  }
+
+  clearQueuedTurns(reason) {
+    if (this.queuedTurns.length === 0) return;
+    this.log({ type: 'turn-queue-cleared', reason, count: this.queuedTurns.length });
+    this.queuedTurns = [];
+  }
+
+  drainQueuedTurn() {
+    if (this.busy || this.queuedTurns.length === 0) return;
+    const next = this.queuedTurns.shift();
+    this.log({
+      type: 'turn-dequeued',
+      remaining: this.queuedTurns.length,
+      ageMs: Date.now() - next.queuedAt,
+      promptPreview: next.prompt.slice(0, 200),
+    });
+    setImmediate(() => {
+      if (!this.busy) this.runTurn(next.prompt);
+    });
   }
 
   mergeInteractions(incoming) {
@@ -376,7 +416,7 @@ class Session {
 
   async runTurn(prompt) {
     if (this.busy) {
-      this.sendStatus('still working on the previous turn — hold on');
+      this.queueTurn(prompt);
       return;
     }
     this.busy = true;
@@ -541,6 +581,7 @@ class Session {
       this.currentChild = null;
       this.sendStatus(null);
       if (this.cancelled) {
+        this.clearQueuedTurns('cancelled');
         this.send('system', 'turn cancelled');
         return;
       }
@@ -554,6 +595,7 @@ class Session {
           details: { exitCode: code, stderrTail: stderrBuf.trim().slice(-2000) },
         });
         this.killHotSpare();
+        this.drainQueuedTurn();
         return;
       }
       if (!anyOutput) {
@@ -566,6 +608,7 @@ class Session {
         });
         this.killHotSpare();
       }
+      this.drainQueuedTurn();
     });
 
     child.on('error', (err) => {
@@ -580,12 +623,17 @@ class Session {
         details: { bin: CODEX_BIN, err: err.message },
       });
       this.killHotSpare();
+      this.clearQueuedTurns('spawn_failed');
     });
   }
 
   handleCancel() {
-    if (!this.currentChild) return;
+    if (!this.currentChild) {
+      this.clearQueuedTurns('cancelled');
+      return;
+    }
     this.cancelled = true;
+    this.clearQueuedTurns('cancelled');
     this.currentChild.kill('SIGTERM');
     this.log({ type: 'cancel' });
   }
@@ -677,6 +725,7 @@ class Session {
     this.transcript = safeMessages(saved.messages);
     this.interactions = safeInteractions(saved.interactions);
     this.pendingForkContext = null;
+    this.clearQueuedTurns('load');
     this.ws.send(JSON.stringify({
       type: 'restore',
       name,
@@ -728,6 +777,7 @@ class Session {
       this.transcript = messages;
       this.interactions = interactions;
       this.pendingForkContext = savedViewContextPrompt(view);
+      this.clearQueuedTurns('fork');
       this.killHotSpare();
       this.ws.send(JSON.stringify({ type: 'view_forked', view }));
       this.log({ type: 'fork-view', name: view.name, messages: messages.length });
@@ -934,6 +984,7 @@ wss.on('connection', (ws) => {
     // Suppress the 'turn cancelled' message on child close — there's no
     // client left to receive it.
     session.cancelled = true;
+    session.clearQueuedTurns('disconnect');
     try { session.currentChild?.kill('SIGTERM'); } catch { /* already dead */ }
     session.killHotSpare();
   });
