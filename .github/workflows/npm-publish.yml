@@ -43,9 +43,6 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none'
         run: npm version ${{ inputs.version_bump }} --no-git-tag-version
 
-      - name: Sync lockfile
-        run: npm install --package-lock-only --ignore-scripts
-
       - name: Install dependencies
         run: npm ci
 
