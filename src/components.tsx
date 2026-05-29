@@ -7,6 +7,7 @@ import { useMouseClick, useMouseHover } from './mouse.js';
 // Widgets in the subtree won't appear in Tab order, won't highlight on hover,
 // and won't respond to clicks or Enter/Space.
 export const FocusActiveContext = createContext(true);
+const MAX_BUTTON_LABEL_CELLS = 32;
 
 interface ButtonProps {
   label: string;
@@ -29,6 +30,8 @@ export function Button({ label, onPress, autoFocus }: ButtonProps): React.ReactE
   });
 
   const active = (isFocused || hovered) && isActive;
+  const labelCells = Array.from(label).length;
+  const width = Math.max(4, Math.min(labelCells, MAX_BUTTON_LABEL_CELLS) + 4);
 
   return (
     <Box
@@ -36,8 +39,10 @@ export function Button({ label, onPress, autoFocus }: ButtonProps): React.ReactE
       borderStyle="round"
       borderColor={active ? 'cyan' : 'gray'}
       paddingX={1}
+      flexShrink={0}
+      width={width}
     >
-      <Text inverse={isFocused} bold={hovered && !isFocused}>{label}</Text>
+      <Text inverse={isFocused} bold={hovered && !isFocused} wrap="truncate-end">{label}</Text>
     </Box>
   );
 }
