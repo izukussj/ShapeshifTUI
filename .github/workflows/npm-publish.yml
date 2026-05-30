@@ -1,6 +1,9 @@
 name: Publish npm package
 
 on:
+  push:
+    branches:
+      - main
   release:
     types: [published]
   workflow_dispatch:
@@ -52,6 +55,21 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check package version
+        id: package
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if npm view "$name@$version" version > /dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "$name@$version is already published; skipping npm publish."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Commit version bump
         if: github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none'
         run: |
@@ -62,4 +80,5 @@ jobs:
           git push
 
       - name: Publish
+        if: steps.package.outputs.published != 'true'
         run: npm publish --access public --provenance --ignore-scripts
