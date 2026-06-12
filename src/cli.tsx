@@ -1,6 +1,7 @@
 import React from 'react';
 import path from 'node:path';
 import net from 'node:net';
+import fs from 'node:fs';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { render } from 'ink';
@@ -21,6 +22,7 @@ type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 const SANDBOX_MODES: SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
 const DEFAULT_BRIDGE_PORT = 8080;
 const FALLBACK_BRIDGE_PORTS = Array.from({ length: 20 }, (_, i) => DEFAULT_BRIDGE_PORT + i);
+const CLI_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 interface CliArgs {
   url: string;
@@ -28,6 +30,43 @@ interface CliArgs {
   cwd: string;
   serve: boolean;
   sandbox: SandboxMode | null;
+}
+
+export function readPackageVersion(startDir = CLI_DIR): string {
+  let dir = startDir;
+  while (true) {
+    const candidate = path.join(dir, 'package.json');
+    if (fs.existsSync(candidate)) {
+      const pkg = JSON.parse(fs.readFileSync(candidate, 'utf8')) as { version?: unknown };
+      if (typeof pkg.version === 'string') return pkg.version;
+    }
+
+    const parent = path.dirname(dir);
+    if (parent === dir) return 'unknown';
+    dir = parent;
+  }
+}
+
+export function helpText(version = readPackageVersion()): string {
+  return [
+    `Usage: shapeshiftui [ws-url] [options]`,
+    '',
+    `ShapeshifTUI ${version}`,
+    '',
+    `Launches the TUI. If no URL is given, spawns the Codex bridge on :${DEFAULT_BRIDGE_PORT}.`,
+    '',
+    'Options:',
+    '  --cwd <path>           run codex from this directory (default: current directory)',
+    '  --write                allow codex to edit files in the workspace',
+    '                         (shorthand for --sandbox workspace-write)',
+    '  --sandbox <mode>       set codex sandbox mode explicitly:',
+    '                           read-only             default; no writes (safest)',
+    '                           workspace-write       edits within --cwd only',
+    '                           danger-full-access    no sandboxing (use with care)',
+    '  --no-serve             skip spawning a bridge (use when one is already running)',
+    '  -v, --version          print the shapeshiftui version and exit',
+    '  -h, --help             show this help and exit',
+  ].join('\n');
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -61,20 +100,10 @@ function parseArgs(argv: string[]): CliArgs {
       }
       setSandbox(next as SandboxMode, '--sandbox');
     } else if (a === '--help' || a === '-h') {
-      console.log('Usage: shapeshiftui [ws-url] [options]');
-      console.log('');
-      console.log('Launches the TUI. If no URL is given, spawns the Codex bridge on :8080.');
-      console.log('');
-      console.log('Options:');
-      console.log('  --cwd <path>           run codex from this directory (default: current directory)');
-      console.log('  --write                allow codex to edit files in the workspace');
-      console.log('                         (shorthand for --sandbox workspace-write)');
-      console.log('  --sandbox <mode>       set codex sandbox mode explicitly:');
-      console.log('                           read-only             default; no writes (safest)');
-      console.log('                           workspace-write       edits within --cwd only');
-      console.log('                           danger-full-access    no sandboxing (use with care)');
-      console.log('  --no-serve             skip spawning a bridge (use when one is already running)');
-      console.log('  -h, --help             show this help and exit');
+      console.log(helpText());
+      process.exit(0);
+    } else if (a === '--version' || a === '-v') {
+      console.log(readPackageVersion());
       process.exit(0);
     } else if (a && !a.startsWith('--')) {
       url = a;
