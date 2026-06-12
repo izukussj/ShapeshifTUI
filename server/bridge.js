@@ -55,13 +55,15 @@ Your component is a single arrow function expression (NOT a default export, NOT 
 - TextInput (from ink-text-input)
 - Button — custom component: \`<Button label="Click me" minWidth={12} onPress={() => ...} />\`
 
+\`TextInput\` is focus-managed by ShapeshifTUI when you omit \`focus\`; Tab moves between inputs. If you manually pass \`focus\`, ensure exactly one input has \`focus={true}\` at a time. Never render multiple \`TextInput focus={true}\` controls.
+
 ### Rules
 1. Always return a single root \`<Box>\` element.
 2. Use \`useState\` for local state, \`useEffect\` for side effects.
 3. Handle deterministic UI locally with React state: tabs, filters, sorting, row selection, expand/collapse, counters, timers, pagination over embedded data, form drafts, and add/remove/toggle operations over local data. Do not call \`submitEvent\` for these.
 4. Use \`sendEvent\` for optional context after local state changes; it should not trigger a response.
 5. Use \`submitEvent\` only for actions that need your response, tools, fresh data, or regenerated UI.
-6. Use \`<TextInput value={v} onChange={setV} focus={bool} />\` for text inputs.
+6. Use \`<TextInput value={v} onChange={setV} />\` for text inputs unless you are explicitly managing focus for multiple inputs.
 7. Use \`<Button label="..." minWidth={10} onPress={() => ...} />\` for buttons. Buttons are keyboard-focusable (Tab) and activated with Enter/Space. Buttons also accept \`width\` and \`maxWidth\`; use them in action rows so click feedback and changing labels do not resize the layout.
 8. Keep components self-contained — all state lives inside the component.
 9. Do NOT import anything. Do NOT use export. Just the arrow function.

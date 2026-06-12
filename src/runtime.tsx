@@ -8,6 +8,14 @@ import type { AppError } from './types.js';
 
 type InputHandler = Parameters<typeof Ink.useInput>[0];
 type TextInputProps = React.ComponentProps<typeof TextInput>;
+type RuntimeTextInputProps = TextInputProps & { autoFocus?: boolean };
+
+interface RuntimeTextInputFocusContextValue {
+  appFocusedRef: React.MutableRefObject<boolean>;
+  allocateInputId: () => number;
+}
+
+const RuntimeTextInputFocusContext = React.createContext<RuntimeTextInputFocusContextValue | null>(null);
 
 interface RuntimeProps {
   source: string | null;
@@ -48,12 +56,10 @@ export function Runtime({
     useInput: (handler: InputHandler, opts?: { isActive?: boolean }) =>
       Ink.useInput(handler, { ...opts, isActive: focusedRef.current && (opts?.isActive ?? true) }),
 
-    // Gate TextInput: force focus={false} when pane is inactive.
-    TextInput: (props: TextInputProps) =>
-      React.createElement(TextInput, {
-        ...props,
-        focus: focusedRef.current && (typeof props.focus === 'boolean' ? props.focus : true),
-      }),
+    // Gate TextInput: generated components often render multiple inputs
+    // without explicit focus props. Register each with Ink's focus manager so
+    // typing goes to one input, not every input at once.
+    TextInput: RuntimeTextInput,
   }), []);
 
   const compiled = useMemo(() => {
@@ -135,13 +141,59 @@ export function Runtime({
       ) : null}
       <Box width={viewportColumns} height={viewportRows} overflowX="hidden" overflowY="hidden" flexDirection="column" flexShrink={0}>
         <RuntimeErrorBoundary key={source} onError={onRenderError}>
-          <Box width={viewportColumns} flexDirection="column" flexShrink={0} marginTop={scrollOffset > 0 ? -scrollOffset : 0}>
-            <Component sendEvent={sendEvent} submitEvent={submitEvent} context={context} />
-          </Box>
+          <RuntimeTextInputFocusProvider key={source} appFocusedRef={focusedRef}>
+            <Box width={viewportColumns} flexDirection="column" flexShrink={0} marginTop={scrollOffset > 0 ? -scrollOffset : 0}>
+              <Component sendEvent={sendEvent} submitEvent={submitEvent} context={context} />
+            </Box>
+          </RuntimeTextInputFocusProvider>
         </RuntimeErrorBoundary>
       </Box>
     </Box>
   );
+}
+
+interface RuntimeTextInputFocusProviderProps {
+  appFocusedRef: React.MutableRefObject<boolean>;
+  children: React.ReactNode;
+}
+
+function RuntimeTextInputFocusProvider({ appFocusedRef, children }: RuntimeTextInputFocusProviderProps): React.ReactElement {
+  const nextInputId = useRef(0);
+  const value = useMemo<RuntimeTextInputFocusContextValue>(() => ({
+    appFocusedRef,
+    allocateInputId: () => nextInputId.current++,
+  }), [appFocusedRef]);
+
+  return (
+    <RuntimeTextInputFocusContext.Provider value={value}>
+      {children}
+    </RuntimeTextInputFocusContext.Provider>
+  );
+}
+
+function RuntimeTextInput({ autoFocus, focus, ...props }: RuntimeTextInputProps): React.ReactElement {
+  const focusContext = React.useContext(RuntimeTextInputFocusContext);
+  const inputIdRef = useRef<number | null>(null);
+  if (inputIdRef.current === null) {
+    inputIdRef.current = focusContext?.allocateInputId() ?? 0;
+  }
+
+  const explicitFocus = typeof focus === 'boolean';
+  const appFocused = focusContext?.appFocusedRef.current ?? true;
+  const isActive = appFocused && (!explicitFocus || focus);
+  const shouldAutoFocus = autoFocus ?? (inputIdRef.current === 0 && (!explicitFocus || focus));
+  const focusId = `runtime-text-input-${inputIdRef.current}`;
+  const focusManager = Ink.useFocusManager();
+  const { isFocused } = Ink.useFocus({ id: focusId, autoFocus: shouldAutoFocus, isActive });
+
+  useEffect(() => {
+    if (appFocused && focus === true) focusManager.focus(focusId);
+  }, [appFocused, focus, focusId, focusManager]);
+
+  return React.createElement(TextInput, {
+    ...props,
+    focus: appFocused && isFocused,
+  });
 }
 
 interface RuntimeErrorBoundaryProps {

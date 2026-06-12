@@ -19,6 +19,8 @@ function exitAltScreen() {
 
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 const SANDBOX_MODES: SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
+const DEFAULT_BRIDGE_PORT = 8080;
+const FALLBACK_BRIDGE_PORTS = Array.from({ length: 20 }, (_, i) => DEFAULT_BRIDGE_PORT + i);
 
 interface CliArgs {
   url: string;
@@ -29,7 +31,7 @@ interface CliArgs {
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  let url = 'ws://localhost:8080';
+  let url = `ws://localhost:${DEFAULT_BRIDGE_PORT}`;
   let urlProvided = false;
   let cwd = path.resolve(process.cwd());
   let serve = true;
@@ -80,6 +82,23 @@ function parseArgs(argv: string[]): CliArgs {
     }
   }
   return { url, urlProvided, cwd, serve, sandbox };
+}
+
+export function bridgeUrlWithPort(url: string, port: number): string {
+  const u = new URL(url);
+  u.port = String(port);
+  return u.toString();
+}
+
+export async function firstFreePort(
+  host: string,
+  ports: readonly number[],
+  isPortOpen: (host: string, port: number) => Promise<boolean> = probePort,
+): Promise<number | null> {
+  for (const port of ports) {
+    if (!(await isPortOpen(host, port))) return port;
+  }
+  return null;
 }
 
 function probePort(host: string, port: number, timeoutMs = 250): Promise<boolean> {
@@ -171,8 +190,41 @@ async function spawnBridge(url: string, sandbox: SandboxMode | null): Promise<Ch
   return child;
 }
 
+async function spawnBridgeOnFreePort(
+  baseUrl: string,
+  sandbox: SandboxMode | null,
+  ports = FALLBACK_BRIDGE_PORTS,
+): Promise<{ url: string; child: ChildProcess }> {
+  const u = new URL(baseUrl);
+  const host = u.hostname || 'localhost';
+  const port = await firstFreePort(host, ports);
+  if (port === null) {
+    throw new Error(`No free bridge port found in range ${ports[0]}-${ports[ports.length - 1]}.`);
+  }
+
+  const nextUrl = bridgeUrlWithPort(baseUrl, port);
+  const child = await spawnBridge(nextUrl, sandbox);
+  if (!child) {
+    throw new Error(`Bridge port ${port} became unavailable before startup; retry the command.`);
+  }
+
+  return { url: nextUrl, child };
+}
+
+async function connectClient(url: string): Promise<Client> {
+  const client = new Client(url);
+  try {
+    await client.waitForOpen();
+    return client;
+  } catch (err) {
+    client.close();
+    throw err;
+  }
+}
+
 async function main() {
   const { url, urlProvided, cwd, serve, sandbox } = parseArgs(process.argv.slice(2));
+  let effectiveUrl = url;
 
   if (sandbox && urlProvided) {
     process.stderr.write(
@@ -184,7 +236,7 @@ async function main() {
   let bridgeChild: ChildProcess | null = null;
   if (serve && !urlProvided) {
     try {
-      const child = await spawnBridge(url, sandbox);
+      const child = await spawnBridge(effectiveUrl, sandbox);
       bridgeChild = child ?? null;
     } catch (err) {
       console.error(`\n${(err as Error).message}\n`);
@@ -192,13 +244,36 @@ async function main() {
     }
   }
 
-  const client = new Client(url);
+  let client: Client;
   try {
-    await client.waitForOpen();
+    client = await connectClient(effectiveUrl);
   } catch (err) {
-    console.error(`Failed to connect to ${url}: ${(err as Error).message}`);
     bridgeChild?.kill();
-    process.exit(1);
+    bridgeChild = null;
+
+    if (!serve || urlProvided) {
+      console.error(`Failed to connect to ${effectiveUrl}: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    try {
+      const occupiedPort = Number(new URL(effectiveUrl).port) || DEFAULT_BRIDGE_PORT;
+      const fallbackPorts = FALLBACK_BRIDGE_PORTS.filter((port) => port !== occupiedPort);
+      process.stderr.write(
+        `failed to connect to ${effectiveUrl}; trying a free fallback port…\n`,
+      );
+      const fallback = await spawnBridgeOnFreePort(effectiveUrl, sandbox, fallbackPorts);
+      effectiveUrl = fallback.url;
+      bridgeChild = fallback.child;
+      client = await connectClient(effectiveUrl);
+    } catch (fallbackErr) {
+      bridgeChild?.kill();
+      console.error(
+        `Failed to connect to ${url}: ${(err as Error).message}\n` +
+        `Fallback failed: ${(fallbackErr as Error).message}`,
+      );
+      process.exit(1);
+    }
   }
 
   client.send({ type: 'init', cwd });
@@ -226,8 +301,10 @@ async function main() {
   bridgeChild?.kill();
 }
 
-main().catch((err) => {
-  exitAltScreen();
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    exitAltScreen();
+    console.error(err);
+    process.exit(1);
+  });
+}

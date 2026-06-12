@@ -18,6 +18,7 @@ describe('Runtime render errors', () => {
       focused: true,
       scrollOffset: 2,
       availableRows: 8,
+      availableColumns: 40,
       onCompileError: onError,
     }));
 
@@ -39,6 +40,7 @@ describe('Runtime render errors', () => {
       focused: true,
       scrollOffset: 0,
       availableRows: 12,
+      availableColumns: 40,
       onCompileError: onError,
     }));
 
@@ -50,6 +52,41 @@ describe('Runtime render errors', () => {
       message: expect.stringContaining('can’t be nested inside <Text>'),
     }));
     expect(app.lastFrame()).toContain('Render error');
+
+    app.unmount();
+  });
+
+  it('does not type into every generated TextInput at once', async () => {
+    const app = render(React.createElement(Runtime, {
+      source: `() => {
+        const [first, setFirst] = useState('');
+        const [second, setSecond] = useState('');
+        return (
+          <Box flexDirection="column">
+            <Text>first: {first || '-'}</Text>
+            <TextInput value={first} onChange={setFirst} />
+            <Text>second: {second || '-'}</Text>
+            <TextInput value={second} onChange={setSecond} />
+          </Box>
+        );
+      }`,
+      sendEvent: () => {},
+      submitEvent: () => {},
+      context: { events: [] },
+      focused: true,
+      scrollOffset: 0,
+      availableRows: 12,
+      availableColumns: 40,
+      onCompileError: vi.fn(),
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    app.stdin.write('x');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const frame = app.lastFrame() ?? '';
+    expect(frame).toContain('first: x');
+    expect(frame).toContain('second: -');
 
     app.unmount();
   });

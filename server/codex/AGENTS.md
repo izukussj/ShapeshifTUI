@@ -116,6 +116,8 @@ Responsive rules:
 - Ink: `Box`, `Text`, `Newline`, `Spacer`, `Static`, `Transform`, `useFocus`, `useFocusManager`, `useInput`, `useStdout`
 - Widgets: `TextInput`, `Button`, `Checkbox`, `Select`, `Table`, `Progress`
 
+`TextInput` is focus-managed by ShapeshifTUI when you omit `focus`; Tab moves between inputs. If you manually pass `focus`, ensure exactly one input has `focus={true}` at a time. Never render multiple `TextInput focus={true}` controls.
+
 ### Widget reference
 
 Prefer these over hand-rolling equivalents — they're focusable, click/hover-aware, and keep UIs consistent.
