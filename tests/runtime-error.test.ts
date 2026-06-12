@@ -80,9 +80,10 @@ describe('Runtime render errors', () => {
       onCompileError: vi.fn(),
     }));
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForFrame(app, 'first: -');
+    await new Promise((resolve) => setTimeout(resolve, 50));
     app.stdin.write('x');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForFrame(app, 'first: x');
 
     const frame = app.lastFrame() ?? '';
     expect(frame).toContain('first: x');
@@ -91,3 +92,10 @@ describe('Runtime render errors', () => {
     app.unmount();
   });
 });
+
+async function waitForFrame(app: ReturnType<typeof render>, text: string): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    if ((app.lastFrame() ?? '').includes(text)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
