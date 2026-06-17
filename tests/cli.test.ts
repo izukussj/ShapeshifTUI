@@ -31,6 +31,11 @@ describe('CLI bridge port helpers', () => {
     expect(helpText('1.2.3')).toContain('-v, --version');
   });
 
+  it('includes the Codex resume option in help output', () => {
+    expect(helpText('1.2.3')).toContain('--resume <thread-id>');
+    expect(helpText('1.2.3')).toContain('--codex-thread <id>');
+  });
+
   it('reads package version by walking up from a nested directory', () => {
     const root = mkdtempSync(join(tmpdir(), 'shapeshiftui-version-'));
     try {

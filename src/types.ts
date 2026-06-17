@@ -133,7 +133,7 @@ export type ServerMessage =
   | { type: 'view_forked'; view: ForkedView };
 
 export type ClientMessage =
-  | { type: 'init'; cwd: string }
+  | { type: 'init'; cwd: string; codexThreadId?: string | null }
   | { type: 'chat'; content: string; interactions: InteractionRecord[] }
   | { type: 'event'; eventType: string; data: unknown }
   | { type: 'save'; name: string }

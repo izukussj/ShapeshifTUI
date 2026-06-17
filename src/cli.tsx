@@ -30,6 +30,7 @@ interface CliArgs {
   cwd: string;
   serve: boolean;
   sandbox: SandboxMode | null;
+  codexThreadId: string | null;
 }
 
 export function readPackageVersion(startDir = CLI_DIR): string {
@@ -64,6 +65,8 @@ export function helpText(version = readPackageVersion()): string {
     '                           workspace-write       edits within --cwd only',
     '                           danger-full-access    no sandboxing (use with care)',
     '  --no-serve             skip spawning a bridge (use when one is already running)',
+    '  --resume <thread-id>   resume an existing Codex conversation',
+    '  --codex-thread <id>    alias for --resume',
     '  -v, --version          print the shapeshiftui version and exit',
     '  -h, --help             show this help and exit',
   ].join('\n');
@@ -85,6 +88,7 @@ function parseArgs(argv: string[]): CliArgs {
   let cwd = path.resolve(process.cwd());
   let serve = true;
   let sandbox: SandboxMode | null = null;
+  let codexThreadId: string | null = null;
   const setSandbox = (mode: SandboxMode, flag: string) => {
     if (sandbox && sandbox !== mode) {
       throw new Error(`Conflicting sandbox flags: already set to "${sandbox}", got ${flag} (${mode})`);
@@ -99,6 +103,10 @@ function parseArgs(argv: string[]): CliArgs {
       cwd = path.resolve(next);
     } else if (a === '--no-serve') {
       serve = false;
+    } else if (a === '--resume' || a === '--codex-thread') {
+      const next = argv[++i];
+      if (!next) throw new Error(`${a} requires a Codex thread id`);
+      codexThreadId = next;
     } else if (a === '--write' || a === '--writable') {
       // Shorthand for --sandbox workspace-write: codex may edit files in cwd.
       setSandbox('workspace-write', a);
@@ -120,7 +128,7 @@ function parseArgs(argv: string[]): CliArgs {
       urlProvided = true;
     }
   }
-  return { url, urlProvided, cwd, serve, sandbox };
+  return { url, urlProvided, cwd, serve, sandbox, codexThreadId };
 }
 
 export function bridgeUrlWithPort(url: string, port: number): string {
@@ -262,7 +270,7 @@ async function connectClient(url: string): Promise<Client> {
 }
 
 async function main() {
-  const { url, urlProvided, cwd, serve, sandbox } = parseArgs(process.argv.slice(2));
+  const { url, urlProvided, cwd, serve, sandbox, codexThreadId } = parseArgs(process.argv.slice(2));
   let effectiveUrl = url;
 
   if (sandbox && urlProvided) {
@@ -315,7 +323,7 @@ async function main() {
     }
   }
 
-  client.send({ type: 'init', cwd });
+  client.send({ type: 'init', cwd, codexThreadId });
 
   enterAltScreen();
   // Mouse on by default — set SHAPESHIFTUI_MOUSE=0 to disable at launch.

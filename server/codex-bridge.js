@@ -178,6 +178,7 @@ class Session {
     this.nextChild = null;
     this.nextChildKey = null;
     this.nextChildBornAt = 0;
+    this.needsResumePreamble = false;
   }
 
   summarizeAction(data) {
@@ -223,7 +224,7 @@ class Session {
     });
   }
 
-  handleInit({ cwd }) {
+  handleInit({ cwd, codexThreadId }) {
     if (typeof cwd !== 'string' || !cwd) return;
     const resolved = path.resolve(cwd);
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
@@ -243,6 +244,18 @@ class Session {
       this.clearQueuedTurns('cwd_changed');
       this.killHotSpare();
     }
+
+    const resumeThreadId = typeof codexThreadId === 'string' ? codexThreadId.trim() : '';
+    if (resumeThreadId) {
+      this.threadId = resumeThreadId;
+      this.pendingForkContext = null;
+      this.needsResumePreamble = true;
+      this.killHotSpare();
+      this.log({ type: 'init', cwd: resolved, codexThreadId: resumeThreadId, resume: true });
+      this.send('ai', `Resumed Codex thread \`${resumeThreadId}\`. Working in \`${resolved}\`.`);
+      return;
+    }
+
     this.log({ type: 'init', cwd: resolved });
     this.send('ai', `Working in \`${resolved}\`.`);
   }
@@ -427,10 +440,11 @@ class Session {
     // On first turn with a non-default cwd, codex can't discover our AGENTS.md
     // (it lives in server/codex/). Prepend the canonical contract as a preamble
     // so the widget rendering protocol applies wherever codex runs.
-    const needsPreamble = !resume && this.cwd !== CODEX_CWD;
+    const needsPreamble = (!resume && this.cwd !== CODEX_CWD) || this.needsResumePreamble;
     const finalPrompt = needsPreamble
       ? `${CANONICAL_INSTRUCTIONS}\n\n---\n\nUser: ${prompt}`
       : prompt;
+    this.needsResumePreamble = false;
 
     let stderrBuf = '';
     let stdoutBuf = '';
