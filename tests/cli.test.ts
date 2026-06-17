@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { bridgeUrlWithPort, firstFreePort, helpText, readPackageVersion } from '../src/cli.js';
+import { pathToFileURL } from 'node:url';
+import { bridgeUrlWithPort, firstFreePort, helpText, isCliEntrypoint, readPackageVersion } from '../src/cli.js';
 
 describe('CLI bridge port helpers', () => {
   it('rewrites the port while preserving the URL host and protocol', () => {
@@ -38,6 +39,22 @@ describe('CLI bridge port helpers', () => {
       writeFileSync(join(root, 'package.json'), JSON.stringify({ version: '9.8.7' }));
 
       expect(readPackageVersion(nested)).toBe('9.8.7');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('treats npm bin symlinks as the CLI entrypoint', () => {
+    const root = mkdtempSync(join(tmpdir(), 'shapeshiftui-entrypoint-'));
+    try {
+      const realCli = join(root, 'lib', 'node_modules', 'shapeshiftui', 'dist', 'cli.js');
+      const bin = join(root, 'bin', 'shapeshiftui');
+      mkdirSync(join(root, 'bin'), { recursive: true });
+      mkdirSync(join(root, 'lib', 'node_modules', 'shapeshiftui', 'dist'), { recursive: true });
+      writeFileSync(realCli, '');
+      symlinkSync(realCli, bin);
+
+      expect(isCliEntrypoint(bin, pathToFileURL(realCli).toString())).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

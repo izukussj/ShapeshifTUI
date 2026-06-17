@@ -69,6 +69,16 @@ export function helpText(version = readPackageVersion()): string {
   ].join('\n');
 }
 
+function realPathForEntrypoint(value: string): string {
+  const resolved = path.resolve(value);
+  return fs.existsSync(resolved) ? fs.realpathSync(resolved) : resolved;
+}
+
+export function isCliEntrypoint(argvPath: string | undefined, moduleUrl: string): boolean {
+  if (!argvPath) return false;
+  return realPathForEntrypoint(argvPath) === realPathForEntrypoint(fileURLToPath(moduleUrl));
+}
+
 function parseArgs(argv: string[]): CliArgs {
   let url = `ws://localhost:${DEFAULT_BRIDGE_PORT}`;
   let urlProvided = false;
@@ -330,7 +340,7 @@ async function main() {
   bridgeChild?.kill();
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isCliEntrypoint(process.argv[1], import.meta.url)) {
   main().catch((err) => {
     exitAltScreen();
     console.error(err);
