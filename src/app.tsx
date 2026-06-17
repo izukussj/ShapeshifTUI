@@ -8,8 +8,9 @@ import { extractCodeBlock, type SendEvent, type SubmitEvent, type InteractionCon
 import { McpPanel, type McpPanelMode } from './mcp.js';
 import { PluginGuidePanel } from './plugin-guide.js';
 import { SavedViewsPanel } from './saved-state.js';
+import { SessionsPanel } from './sessions.js';
 import { Landing, LANDING_HINT, type LandingAction } from './landing.js';
-import type { AppError, ApprovalRequest, ChatMessage, InteractionRecord, McpAddPayload, McpOpResult, McpServer, SavedViewSummary, ServerMessage } from './types.js';
+import type { AppError, ApprovalRequest, ChatMessage, CodexSessionSummary, InteractionRecord, McpAddPayload, McpOpResult, McpServer, SavedViewSummary, ServerMessage } from './types.js';
 import { onMouse, setMouseEnabled, isMouseEnabled, hitTest } from './mouse.js';
 
 const HISTORY_LIMIT = 50;
@@ -18,7 +19,7 @@ const MAX_RETRIES = 2;
 type Pane = 'chat' | 'runtime';
 type ConnectionState = 'connected' | 'reconnecting' | 'lost';
 type McpAdminView = { mode: McpPanelMode; name?: string };
-type AdminView = McpAdminView | { mode: 'plugin' } | { mode: 'saves'; action: 'load' | 'fork' };
+type AdminView = McpAdminView | { mode: 'plugin' } | { mode: 'saves'; action: 'load' | 'fork' } | { mode: 'sessions' };
 
 interface AppProps {
   client: Client;
@@ -64,6 +65,8 @@ export function App({ client }: AppProps): React.ReactElement {
   const [mcpLastOp, setMcpLastOp] = useState<McpOpResult | null>(null);
   const [savedViews, setSavedViews] = useState<SavedViewSummary[] | null>(null);
   const [viewsLoading, setViewsLoading] = useState(false);
+  const [codexSessions, setCodexSessions] = useState<CodexSessionSummary[] | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   // Some terminals update process.stdout.columns/rows on SIGWINCH but Ink may
   // not repaint until the next input event. This no-op state bump makes resize
   // responsiveness immediate for the shell and generated runtime components.
@@ -260,6 +263,23 @@ export function App({ client }: AppProps): React.ReactElement {
       } else if (msg.type === 'views_list_result') {
         setSavedViews(msg.views);
         setViewsLoading(false);
+      } else if (msg.type === 'sessions_list_result') {
+        setCodexSessions(msg.sessions);
+        setSessionsLoading(false);
+      } else if (msg.type === 'session_resumed') {
+        setSessionsLoading(false);
+        setAdminView(null);
+        setMessages([{
+          id: `sys-${Date.now()}`,
+          sender: 'system',
+          content: `resumed Codex thread ${msg.session.id}`,
+          timestamp: Date.now(),
+        }]);
+        setSource(null);
+        setInteractions([]);
+        setScrollOffset(0);
+        setRuntimeScrollOffset(0);
+        setActivePane('chat');
       } else if (msg.type === 'view_forked') {
         const view = msg.view;
         setMessages([
@@ -327,6 +347,15 @@ export function App({ client }: AppProps): React.ReactElement {
     setSavedViews(null);
     setViewsLoading(true);
     client.send({ type: 'list-views' });
+  }, [client]);
+
+  const openSessions = useCallback(() => {
+    setAdminView({ mode: 'sessions' });
+    setActivePane('runtime');
+    setRuntimeScrollOffset(0);
+    setCodexSessions(null);
+    setSessionsLoading(true);
+    client.send({ type: 'list-sessions' });
   }, [client]);
 
   const requestLandingViews = useCallback(() => {
@@ -407,6 +436,10 @@ export function App({ client }: AppProps): React.ReactElement {
           }
           return pushSystem('usage: /mcp list | /mcp add <name> | /mcp remove <name>');
         }
+        if (cmd === '/sessions' || cmd === '/threads') {
+          openSessions();
+          return pushSystem('opened Codex sessions');
+        }
         if (cmd === '/plugin' || cmd === '/plugins') {
           setAdminView({ mode: 'plugin' });
           setActivePane('runtime');
@@ -420,6 +453,7 @@ export function App({ client }: AppProps): React.ReactElement {
               '  /load <name>    restore a saved view\n' +
               '  /load           list saves\n' +
               '  /fork <name>    start fresh from a save (/fork lists when empty)\n' +
+              '  /sessions       list and resume Codex sessions for this dir\n' +
               '  /mcp list       list Codex MCP servers\n' +
               '  /mcp add <name> open native add form\n' +
               '  /mcp remove <name> confirm removal\n' +
@@ -442,7 +476,7 @@ export function App({ client }: AppProps): React.ReactElement {
       setStatus(null);
       client.send({ type: 'chat', content, interactions });
     },
-    [client, interactions, openMcp, openSaves, pushSystem],
+    [client, interactions, openMcp, openSaves, openSessions, pushSystem],
   );
 
   const refreshMcp = useCallback(() => {
@@ -453,6 +487,11 @@ export function App({ client }: AppProps): React.ReactElement {
   const refreshViews = useCallback(() => {
     setViewsLoading(true);
     client.send({ type: 'list-views' });
+  }, [client]);
+
+  const refreshSessions = useCallback(() => {
+    setSessionsLoading(true);
+    client.send({ type: 'list-sessions' });
   }, [client]);
 
   const loadView = useCallback((name: string) => {
@@ -469,6 +508,11 @@ export function App({ client }: AppProps): React.ReactElement {
     client.send({ type: 'delete-view', name });
     setViewsLoading(true);
     client.send({ type: 'list-views' });
+  }, [client]);
+
+  const resumeSession = useCallback((id: string) => {
+    setSessionsLoading(true);
+    client.send({ type: 'resume-session', id });
   }, [client]);
 
   const addMcp = useCallback((payload: McpAddPayload) => {
@@ -584,6 +628,16 @@ export function App({ client }: AppProps): React.ReactElement {
                   onRefresh={refreshViews}
                   onSelect={adminView.action === 'fork' ? forkView : loadView}
                   onDelete={deleteView}
+                  onClose={closeAdminView}
+                />
+              ) : adminView?.mode === 'sessions' ? (
+                <SessionsPanel
+                  sessions={codexSessions}
+                  loading={sessionsLoading}
+                  focused={activePane === 'runtime' && !pendingApproval}
+                  availableRows={availableRows}
+                  onRefresh={refreshSessions}
+                  onResume={resumeSession}
                   onClose={closeAdminView}
                 />
               ) : adminView ? (

@@ -14,6 +14,7 @@ const COMMANDS: SlashCommand[] = [
   { name: '/save', args: '<name>', help: 'save the current view for later', example: '/save dashboard' },
   { name: '/load', args: '[name]', help: 'list or restore saved views', example: '/load dashboard' },
   { name: '/fork', args: '[name]', help: 'list or start fresh from a save', example: '/fork good-base' },
+  { name: '/sessions', args: '', help: 'list Codex sessions in this directory', example: '/sessions' },
   { name: '/mcp', args: '<list|add|remove>', help: 'manage Codex MCP servers', example: '/mcp list' },
   { name: '/plugin', args: '', help: 'show Codex plugin setup guidance', example: '/plugin' },
   { name: '/delete', args: '<name>', help: 'remove a saved view', example: '/delete dashboard' },

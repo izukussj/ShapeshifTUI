@@ -19,6 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_CWD = path.join(__dirname, 'codex');
 const LOG_DIR = path.join(__dirname, 'logs');
 const VIEWS_DIR = path.join(os.homedir(), '.shapeshiftui', 'views');
+const CODEX_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions');
 fs.mkdirSync(LOG_DIR, { recursive: true });
 fs.mkdirSync(VIEWS_DIR, { recursive: true });
 
@@ -111,6 +112,122 @@ function listViewSummaries(cwd) {
     .map(summarizeView)
     .filter((v) => typeof v.name === 'string' && v.name.length > 0)
     .sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0) || a.name.localeCompare(b.name));
+}
+
+function isInsideDir(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function walkJsonlFiles(dir, limit = 5000) {
+  const files = [];
+  const stack = [dir];
+  while (stack.length && files.length < limit) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (err) {
+      logSilent('sessions_scan_failed', `cannot read Codex sessions directory ${current}`, err);
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        files.push(full);
+      }
+    }
+  }
+  return files;
+}
+
+function textFromContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      if (part && typeof part === 'object') {
+        if (typeof part.text === 'string') return part.text;
+        if (typeof part.input_text === 'string') return part.input_text;
+        if (typeof part.output_text === 'string') return part.output_text;
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
+function titleFromText(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
+
+function summarizeCodexSessionFile(file) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch (err) {
+    logSilent('session_stat_failed', `cannot stat Codex session ${file}`, err);
+    return null;
+  }
+
+  let meta = null;
+  let title = '';
+  let turns = 0;
+  try {
+    const lines = fs.readFileSync(file, 'utf8').split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (record?.type === 'session_meta' && record.payload) {
+        meta = record.payload;
+      }
+      if (record?.type === 'response_item' && record.payload?.type === 'message') {
+        const role = record.payload.role;
+        if (role === 'user' || role === 'assistant') turns++;
+        if (!title && role === 'user') {
+          title = titleFromText(textFromContent(record.payload.content));
+        }
+      } else if (record?.type === 'event_msg' && record.payload?.type === 'user_message') {
+        turns++;
+        if (!title) title = titleFromText(record.payload.message);
+      }
+    }
+  } catch (err) {
+    logSilent('session_read_failed', `cannot read Codex session ${file}`, err);
+    return null;
+  }
+
+  if (!meta || typeof meta.id !== 'string' || typeof meta.cwd !== 'string') return null;
+  return {
+    id: meta.id,
+    cwd: meta.cwd,
+    title: title || '(no prompt)',
+    updatedAt: stat.mtimeMs,
+    source: typeof meta.source === 'string' ? meta.source : null,
+    turns,
+  };
+}
+
+function listCodexSessionSummaries(cwd) {
+  if (!fs.existsSync(CODEX_SESSIONS_DIR)) return [];
+  const root = path.resolve(cwd);
+  return walkJsonlFiles(CODEX_SESSIONS_DIR)
+    .map(summarizeCodexSessionFile)
+    .filter(Boolean)
+    .filter((session) => isInsideDir(root, path.resolve(session.cwd)))
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+    .slice(0, 100);
 }
 
 function savedViewContextPrompt(saved) {
@@ -754,6 +871,45 @@ class Session {
     this.ws.send(JSON.stringify({ type: 'views_list_result', views: listViewSummaries(this.cwd) }));
   }
 
+  handleListSessions() {
+    this.ws.send(JSON.stringify({ type: 'sessions_list_result', sessions: listCodexSessionSummaries(this.cwd) }));
+  }
+
+  handleResumeSession(id) {
+    if (typeof id !== 'string' || !id.trim()) {
+      this.emitError({ source: 'user', code: 'session_bad_args', severity: 'info', recoverable: true, message: 'sessions: missing thread id' });
+      return;
+    }
+
+    const requested = id.trim();
+    const matches = listCodexSessionSummaries(this.cwd).filter((session) =>
+      session.id === requested || session.id.startsWith(requested));
+    if (matches.length !== 1) {
+      this.emitError({
+        source: 'user',
+        code: matches.length === 0 ? 'session_not_found' : 'session_ambiguous',
+        severity: 'info',
+        recoverable: true,
+        message: matches.length === 0
+          ? `sessions: no Codex session "${requested}" in ${this.cwd}`
+          : `sessions: "${requested}" matches ${matches.length} sessions; use the full id`,
+      });
+      return;
+    }
+
+    const session = matches[0];
+    this.threadId = session.id;
+    this.cwd = session.cwd;
+    this.transcript = [];
+    this.interactions = [];
+    this.pendingForkContext = null;
+    this.needsResumePreamble = true;
+    this.clearQueuedTurns('resume-session');
+    this.killHotSpare();
+    this.ws.send(JSON.stringify({ type: 'session_resumed', session }));
+    this.log({ type: 'resume-session', thread_id: session.id, cwd: session.cwd });
+  }
+
   handleForkView(name) {
     if (typeof name !== 'string' || !name.trim()) {
       this.emitError({ source: 'user', code: 'view_bad_args', severity: 'info', recoverable: true, message: 'fork: missing save name' });
@@ -975,6 +1131,10 @@ wss.on('connection', (ws) => {
       session.handleLoad(msg.name);
     } else if (msg.type === 'list-views') {
       session.handleListViews();
+    } else if (msg.type === 'list-sessions') {
+      session.handleListSessions();
+    } else if (msg.type === 'resume-session') {
+      session.handleResumeSession(msg.id);
     } else if (msg.type === 'delete-view') {
       session.handleDeleteView(msg.name);
     } else if (msg.type === 'approval_response') {
