@@ -1,6 +1,6 @@
 {
   "name": "shapeshiftui",
-  "version": "2.1.13",
+  "version": "2.1.14",
   "description": "Chat-driven TUI where the AI ships React/Ink components that run in a sandbox",
   "type": "module",
   "license": "MIT",

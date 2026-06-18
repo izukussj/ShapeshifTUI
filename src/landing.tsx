@@ -22,6 +22,7 @@ const LOGO_COMPACT: readonly string[] = [
 
 export type LandingAction =
   | { kind: 'new' }
+  | { kind: 'sessions' }
   | { kind: 'quit' }
   | { kind: 'load'; name: string }
   | { kind: 'fork'; name: string };
@@ -38,8 +39,9 @@ interface LandingProps {
 
 type Mode = 'menu' | 'load' | 'fork';
 
-const MENU: readonly { label: string; mode: Mode | 'new' | 'quit' }[] = [
+const MENU: readonly { label: string; mode: Mode | 'new' | 'sessions' | 'quit' }[] = [
   { label: 'New session', mode: 'new' },
+  { label: 'Resume Codex session', mode: 'sessions' },
   { label: 'Load saved', mode: 'load' },
   { label: 'Fork from save', mode: 'fork' },
   { label: 'Quit', mode: 'quit' },
@@ -77,6 +79,7 @@ export function Landing({
         const pick = MENU[menuIdx];
         if (!pick) return;
         if (pick.mode === 'new') onAction({ kind: 'new' });
+        else if (pick.mode === 'sessions') onAction({ kind: 'sessions' });
         else if (pick.mode === 'quit') onAction({ kind: 'quit' });
         else setMode(pick.mode);
       }
@@ -109,9 +112,7 @@ export function Landing({
       width={columns}
     >
       <Logo variant={variant} />
-      <Box marginTop={1}>
-        <Text dimColor>shapeshif·tui — describe a UI, see it render</Text>
-      </Box>
+      <LandingDescription columns={columns} />
       <Box marginTop={2} flexDirection="column" alignItems="center">
         {mode === 'menu' ? (
           <MenuList index={menuIdx} />
@@ -124,6 +125,21 @@ export function Landing({
           />
         )}
       </Box>
+    </Box>
+  );
+}
+
+function LandingDescription({ columns }: { columns: number }): React.ReactElement {
+  const wide = columns >= 72;
+  const width = Math.max(28, Math.min(columns - 4, 76));
+  return (
+    <Box marginTop={1} width={width} flexDirection="column" alignItems="center" overflowX="hidden">
+      <Text color="cyan" bold wrap="truncate-end">
+        {wide ? 'Turn Codex conversations into live terminal apps.' : 'Codex chats, live terminal apps.'}
+      </Text>
+      <Text dimColor wrap="truncate-end">
+        {wide ? 'Ask, click, resume threads, and keep the work anchored to your repo.' : 'Ask, click, resume, keep working.'}
+      </Text>
     </Box>
   );
 }

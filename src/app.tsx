@@ -369,6 +369,11 @@ export function App({ client }: AppProps): React.ReactElement {
       setLanding(false);
       return;
     }
+    if (action.kind === 'sessions') {
+      setLanding(false);
+      openSessions();
+      return;
+    }
     if (action.kind === 'quit') {
       exit();
       return;
@@ -383,7 +388,7 @@ export function App({ client }: AppProps): React.ReactElement {
       setViewsLoading(true);
       client.send({ type: 'fork-view', name: action.name });
     }
-  }, [client, exit]);
+  }, [client, exit, openSessions]);
 
   const onSend = useCallback(
     (content: string) => {
@@ -682,19 +687,13 @@ export function App({ client }: AppProps): React.ReactElement {
         />
       ) : null}
       {!landing ? <StatusLine status={status} /> : null}
-      <Box height={1} paddingX={1} overflowX="hidden" overflowY="hidden">
-        <Text dimColor>
-          {landing
-            ? LANDING_HINT
-            : pendingApproval
-            ? 'Enter: approve  ·  Tab then Enter: deny  ·  Esc: cancel'
-            : helpOpen
-              ? 'Esc: close help  ·  Ctrl+K: toggle'
-              : status
-                ? `Esc: cancel turn  ·  PgUp/PgDn: scroll  ·  mouse ${mouseOn ? 'on' : 'off'}  ·  Ctrl+C: quit`
-                : `Ctrl+A/E: panes  ·  PgUp/PgDn: scroll  ·  mouse ${mouseOn ? 'on' : 'off'} (Ctrl+P)  ·  Ctrl+C: quit`}
-        </Text>
-      </Box>
+      <FooterHint
+        landing={landing}
+        pendingApproval={!!pendingApproval}
+        helpOpen={helpOpen}
+        busy={!!status}
+        mouseOn={mouseOn}
+      />
     </Box>
   );
 }
@@ -711,23 +710,58 @@ function Header({ connectionState, mouseOn }: HeaderProps): React.ReactElement {
     connectionState === 'reconnecting' ? { color: 'yellow', label: 'reconnecting' } :
     connectionState === 'lost' ? { color: 'red', label: 'connection lost' } :
     null;
+  const mouseLabel = mouseOn ? 'mouse on ' : 'mouse off';
 
   return (
-    <Box height={1} paddingX={1} justifyContent="space-between" overflowX="hidden" overflowY="hidden">
-      <Box>
+    <Box height={1} paddingX={1} overflowX="hidden" overflowY="hidden">
+      <Box width={18} flexShrink={0}>
         <Text color="cyan" bold>◆ </Text>
         <Text bold>ShapeshifTUI</Text>
       </Box>
-      <Box>
-        <Text dimColor>mouse {mouseOn ? 'on' : 'off'}</Text>
+      <Box flexGrow={1} />
+      <Box width={32} flexShrink={0} justifyContent="flex-end">
+        <Box width={9}>
+          <Text dimColor>{mouseLabel}</Text>
+        </Box>
         {dot ? (
           <>
             <Text dimColor>  ·  </Text>
             <Text color={dot.color} bold>● </Text>
-            <Text color={dot.color}>{dot.label}</Text>
+            <Box width={18}>
+              <Text color={dot.color} wrap="truncate-end">{dot.label}</Text>
+            </Box>
           </>
-        ) : null}
+        ) : (
+          <Box width={23} />
+        )}
       </Box>
+    </Box>
+  );
+}
+
+interface FooterHintProps {
+  landing: boolean;
+  pendingApproval: boolean;
+  helpOpen: boolean;
+  busy: boolean;
+  mouseOn: boolean;
+}
+
+function FooterHint({ landing, pendingApproval, helpOpen, busy, mouseOn }: FooterHintProps): React.ReactElement {
+  const mouseLabel = mouseOn ? 'mouse on ' : 'mouse off';
+  const text = landing
+    ? LANDING_HINT
+    : pendingApproval
+      ? 'Enter: approve  ·  Tab then Enter: deny  ·  Esc: cancel'
+      : helpOpen
+        ? 'Esc: close help  ·  Ctrl+K: toggle'
+        : busy
+          ? `Esc: cancel turn  ·  PgUp/PgDn: scroll  ·  ${mouseLabel}  ·  Ctrl+C: quit`
+          : `Ctrl+A/E: panes  ·  PgUp/PgDn: scroll  ·  ${mouseLabel} (Ctrl+P)  ·  Ctrl+C: quit`;
+
+  return (
+    <Box height={1} paddingX={1} overflowX="hidden" overflowY="hidden">
+      <Text dimColor wrap="truncate-end">{text}</Text>
     </Box>
   );
 }
